@@ -1,300 +1,292 @@
-#pragma once
+/*
+ * The MIT License (MIT)
+
+ * Copyright (c) 2017 Sergey Dzhaltyr
+
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+#ifndef _EVENT_BUS_PP_H_
+#define _EVENT_BUS_PP_H_
+
 #include <vector>
-#include <list>
-#include <map>
-#include <functional>
+#include <unordered_map>
 #include <algorithm>
 
 using namespace std;
-using namespace std::placeholders;
 
 class EventBus
 {
 public:
+    template<class TListener, class ...THandlers>
+    static void subscribe(TListener* listener, THandlers ...handlers)
+    {
+        subscribePrivate0(listener, handlers...);
+    }
 
-	template<class C, class ...Args>
-	static void subscribe(const C* aReceiver, Args ...aArgs)
-	{
-		subscribeInternal0(aReceiver, aArgs...);
-	}
+    template<class TListener>
+    static void unsubscribe(TListener* listener)
+    {
+        unsubscribePrivate0(listener);
+    }
 
-	template<class C>
-	static void unsubscribe(const C* aReceiver)
-	{
-		IReceiver* receiver = s_Receivers[(void*)aReceiver];
-		if (receiver == 0)
-			return;
-		delete receiver;
-		s_Receivers.erase((void*)aReceiver);
-	}
+    template<class TEvent>
+    static void send(const TEvent& event)
+    {
+        HandlersCollection<TEvent>::sendEvent(event);
+    }
 
-	template<class T>
-	static void send(const T& aEvent)
-	{
-		ObserversCollection<T>::send(aEvent);
-	}
+    template<class TProducer, class ...TGenerators>
+    static void registerProducer(TProducer* producer, TGenerators ...generators)
+    {
+        registerProducerPrivate0(producer, generators...);
+    }
 
-
-	template<class C, class ...Args>
-	static void produce(const C* aProducer, Args ...aArgs)
-	{
-		produceInternal0(aProducer, aArgs...);
-	}
-
-	template<class C>
-	static void unproduce(const C* aProducer)
-	{
-		IProducer* producer = s_Producers[(void*)aProducer];
-		if (producer == 0)
-			return;
-		delete producer;
-		s_Producers.erase((void*)aProducer);
-	}
+    template<class TProducer>
+    static void unregisterProducer(TProducer* producer)
+    {
+        unregisterProducerPrivate0(producer);
+    }
 
 private:
+    template<class TObject>
+    struct BasicCollection
+    {
+        void add(TObject object)
+        {
+            objects.push_back(object);
+        }
 
-	class IReceiver{public:	virtual ~IReceiver(){};};
-	class IObserver{public:	virtual ~IObserver(){};};
-	
-	class IProducer{public:	virtual ~IProducer(){};};
-	class IProducerEvent{public: virtual ~IProducerEvent(){};};
+        void remove(TObject object)
+        {
+            vector<TObject>::iterator iter = find(objects.begin(), objects.end(), object);
+            if (iter != objects.end())
+            {
+                swap(*iter, objects.back());
+                objects.pop_back();
+            }
+        }
 
-	//Container for typed event observers
-	template<class T>
-	class ObserversCollection
-	{
-		typedef function<void(const T&)> Observer_t;
-		typedef function<T()> ProducerEvent_t;
-	public:
-		static void add(Observer_t* aObserver)
-		{
-			if (aObserver == 0)
-				return;
-			s_Observers.push_back(aObserver);
-			for (unsigned i = 0; i < s_Producers.size(); i++)
-			{
-				if (s_Producers[i] == 0)
-					continue;
-				(*aObserver)((*s_Producers[i])());
-			}
-		}
-
-		static void send(const T& aEvent)
-		{
-			for (unsigned i = 0; i < s_Observers.size(); i++)
-			{
-				if (s_Observers[i] == 0)
-					continue;
-				(*s_Observers[i])(aEvent);
-			}
-		}
-
-		static void remove(Observer_t* aObserver)
-		{
-			for (unsigned i = 0; i < s_Observers.size(); i++)
-			{
-				if (s_Observers[i] == aObserver)
-					s_Observers[i] = 0;
-			}
-		}
-
-		static void repair()
-		{
-			s_Observers.erase(std::remove(s_Observers.begin(), s_Observers.end(), (Observer_t*)0), s_Observers.end());
-		}
-
-		static void addProducer(ProducerEvent_t* aProducer)
-		{
-			if (aProducer == 0)
-				return;
-			s_Producers.push_back(aProducer);
-		}
-
-		static void removeProducer(ProducerEvent_t* aProducer)
-		{
-			for (unsigned i = 0; i < s_Producers.size(); i++)
-			{
-				if (s_Producers[i] == aProducer)
-					s_Producers[i] = 0;
-			}
-		}
-
-		static void repairProducers()
-		{
-			s_Producers.erase(std::remove(s_Producers.begin(), s_Producers.end(), (ProducerEvent_t*)0), s_Producers.end());
-		}
-	private:
-		static vector<Observer_t*> s_Observers;
-		static vector<ProducerEvent_t*> s_Producers;
-	};
+        vector<TObject>    objects;
+    };
 
 
-	//Container for object that receives event
-	template<class T>
-	class Receiver : public IReceiver
-	{
-	public:
-		virtual ~Receiver()
-		{
-			for (unsigned i = 0; i < m_Observers.size(); i++)
-			{
-				delete m_Observers[i];
-			}
-		};
+    struct IListener { virtual ~IListener(){} };
+    struct IEventHandler { virtual ~IEventHandler(){} };
 
-		void addObserver(IObserver* aObserver)
-		{
-			m_Observers.push_back(aObserver);
-		}
-	private:
-		vector<IObserver*> m_Observers;
-	};
+    template<class TEvent>
+    class EventHandlerBase : public IEventHandler
+    {
+    public:
+        virtual void       send(const TEvent&) = 0;
+    };
 
+    template<class TObject>
+    class Listener : public IListener
+    {
+    public:
+        virtual ~Listener()
+        {
+            for (IEventHandler* handler : m_eventHandlers)
+            {
+                delete handler;
+            }
+        }
 
-	//Container for event handling function
-	template<class C, class T>
-	class Observer : public IObserver
-	{
-		typedef function<void(const T&)> Observer_t;
-	public:
-		Observer(const C* aObject, void(C::*aMember)(const T&))
-			:m_Observer(std::forward<Observer_t>(bind(aMember, (C*)aObject, _1)))
-		{
-			ObserversCollection<T>::add(&m_Observer);
-			s_Count++;
-		}
+        void addEventHandler(IEventHandler* eventHandler)
+        {
+            if (find(m_eventHandlers.begin(), m_eventHandlers.end(), eventHandler) == m_eventHandlers.end())
+            {
+                m_eventHandlers.push_back(eventHandler);
+            }
+        }
 
-		virtual ~Observer()
-		{
-			ObserversCollection<T>::remove(&m_Observer);
-			s_Count--;
-			if (s_Count <= 0)
-			{
-				ObserversCollection<T>::repair();
-				s_Count = 0;
-			}
-		};
-	private:
-		Observer_t m_Observer;
-		static unsigned int s_Count;
-	};
+    private:
+        vector<IEventHandler*> m_eventHandlers;
+    };
 
+    template<class TObject, class TEvent>
+    class EventHandler final : public EventHandlerBase<TEvent>
+    {
+        typedef void(TObject::*TEventHandler)(const TEvent&);
+    public:
+        EventHandler(TObject* object, TEventHandler handler)
+            : m_listener(object)
+            , m_handler(handler)
+        {
+            HandlersCollection<TEvent>::addHandler(this);
+        }
 
-	//Container for events producer
-	template<class C>
-	class Producer : IProducer
-	{
-	public:
+        virtual ~EventHandler()
+        {
+            HandlersCollection<TEvent>::removeHandler(this);
+        };
 
-		void addProducerEvent(IProducerEvent* aProducerEvent)
-		{
-			m_Events.push_back(aProducerEvent);
-		}
+        void send(const TEvent& event) override
+        {
+            (m_listener->*m_handler)(event);
+        }
 
-		virtual ~Producer()
-		{
-			for (unsigned i = 0; i < m_Events.size(); i++)
-			{
-				delete m_Events[i];
-			}
-		}
-	private:
-		vector<IProducerEvent*> m_Events;
-	};
+    private:
 
-	//Container for producing event function
-	template<class C, class T>
-	class ProducerEvent : public IProducerEvent
-	{
-		typedef function<T()> ProducerEvent_t;
-	public:
-		ProducerEvent(const C* aObject, T(C::*aMember)())
-			:m_Producer(std::forward<ProducerEvent_t>(bind(aMember, (C*)aObject)))
-		{
-			ObserversCollection<T>::addProducer(&m_Producer);
-			s_Count++;
-		}
+        TObject* m_listener;
+        TEventHandler m_handler;
+    };
 
-		virtual ~ProducerEvent()
-		{
-			ObserversCollection<T>::removeProducer(&m_Producer);
-			s_Count--;
-			if (s_Count <= 0)
-			{
-				ObserversCollection<T>::repairProducers();
-				s_Count = 0;
-			}
-		}
-	private:
-		ProducerEvent_t m_Producer;
-		static unsigned int s_Count;
-	};
+    template<class TEvent>
+    class HandlersCollection final
+    {
+    public:
+        typedef EventHandlerBase<TEvent> TEventHandler;
+
+        static void addHandler(TEventHandler* handler)
+        {
+            s_handlers.add(handler);
+        }
+
+        static void removeHandler(TEventHandler* handler)
+        {
+            s_handlers.remove(handler);
+        }
+
+        static void sendEvent(const TEvent& event)
+        {
+            for (TEventHandler* handler : s_handlers.objects)
+            {
+                if (handler)
+                {
+                    handler->send(event);
+                }
+            }
+        }
+
+    private:
+        static BasicCollection<TEventHandler*> s_handlers;
+    };
 
 
+    struct IProducer { virtual ~IProducer(){} };
+    struct IEventGenerator { virtual ~IEventGenerator(){} };
 
-	template<class C, class ...Args>
-	static void subscribeInternal0(const C* aReceiver, Args ...aArgs)
-	{
-		Receiver<C>* receiver = (Receiver<C>*)s_Receivers[(void*)aReceiver];
-		if (receiver == 0)
-		{
-			receiver = new Receiver<C>();
-			s_Receivers[(void*)aReceiver] = (IReceiver*)receiver;
-		}
-		subscribeInternal1(receiver, aReceiver, aArgs...);
-	}
+    template<class TObject>
+    class Producer : public IProducer
+    {
+    public:
+        virtual ~Producer()
+        {
+            for (IEventGenerator* generator : m_eventGenerators)
+            {
+                delete generator;
+            }
+        }
 
-	template<class C, class T, class ...Args>
-	static void subscribeInternal1(Receiver<C>* aReceiver, const C* aObject, void(C::*aMember)(const T&), Args ...aArgs)
-	{
-		IObserver* observer = (IObserver*)new Observer<C, T>(aObject, aMember);
-		aReceiver->addObserver(observer);
+        void addEventGenerator(IEventGenerator* eventGenerator)
+        {
+            if (find(m_eventGenerators.begin(), m_eventGenerators.end(), eventGenerator) == m_eventGenerators.end())
+            {
+                m_eventGenerators.push_back(eventGenerator);
+            }
+        }
 
-		subscribeInternal1(aReceiver, aObject, aArgs...);
-	}
+    private:
+        vector<IEventHandler*> m_eventGenerators;
+    };
 
-	template<class C, class ...Args>
-	static void produceInternal0(const C* aProducer, Args ...aArgs)
-	{
-		Producer<C>* producer = (Producer<C>*)s_Producers[(void*)aProducer];
-		if (producer == 0)
-		{
-			producer = new Producer<C>();
-			s_Producers[(void*)aProducer] = (IProducer*)producer;
-		}
-		produceInternal1(producer, aProducer, aArgs...);
-	}
+    template<class TObject, class ...THandlers>
+    static void subscribePrivate0(TObject* listnerObject, THandlers ...handlers)
+    {
+        Listener<TObject>* listener = static_cast<Listener<TObject>*>(s_objectObserversMap[listnerObject]);
+        if (!listener)
+        {
+            listener = new Listener<TObject>();
+            s_objectObserversMap[listnerObject] = listener;
+        }
 
-	template<class C, class T, class ...Args>
-	static void produceInternal1(Producer<C>* aProducer, const C* aObject, T(C::*aMember)(), Args ...aArgs)
-	{
-		IProducerEvent* producerEvent = (IProducerEvent*)new ProducerEvent<C, T>(aObject, aMember);
-		aProducer->addProducerEvent(producerEvent);
+        subscribePrivate1(listener, listnerObject, handlers...);
+    }
 
-		produceInternal1(aProducer, aObject, aArgs...);
-	}
+    template<class TObject, class TEvent, class ...THandlers>
+    static void subscribePrivate1(Listener<TObject>* listener, TObject* listnerObject, void(TObject::*handler)(const TEvent&), THandlers ...handlers)
+    {
+        IEventHandler* eventHandler = new EventHandler<TObject, TEvent>(listnerObject, handler);
+        listener->addEventHandler(eventHandler);
+        // TODO: call producers
 
+        subscribePrivate1(listener, listnerObject, handlers...);
+    }
 
-	template<class C>
-	static void subscribeInternal1(Receiver<C>* aReceiver, const C* aObject){}
-	template<class C>
-	static void produceInternal1(Producer<C>* aProducer, const C* aObject){}
+    template<class TObject>
+    static void unsubscribePrivate0(TObject* object)
+    {
+        IListener* listener = s_objectObserversMap[object];
+        if (listener == 0)
+        {
+            return;
+        }
+        delete listener;
+        s_objectObserversMap.erase(object);
+    }
 
-	static map<void*, IReceiver*> s_Receivers;
-	static map<void*, IProducer*> s_Producers;
+    template<class TObject, class ...TGenerators>
+    static void registerProducerPrivate0(TObject* object, TGenerators ...generators)
+    {
+        Producer<TObject>* producer = static_cast<Producer<TObject>*>(s_objectProducersMap[object]);
+        if (!producer)
+        {
+            producer = new Producer<TObject>();
+            s_objectProducersMap[object] = producer;
+        }
+
+        registerProducerPrivate1(producer, object, generators...);
+    }
+
+    template<class TObject, class TEvent, class ...TGenerators>
+    static void registerProducerPrivate1(Producer<TObject>* producer, TObject* object, TEvent(TObject::*generator)(), TGenerators ...generators)
+    {
+        
+
+        registerProducerPrivate1(producer, object, generators...);
+    }
+
+    template<class TObject>
+    static void unregisterProducerPrivate0(TObject* object)
+    {
+        IProducer* producer = s_objectProducersMap[object];
+        if (producer == 0)
+        {
+            return;
+        }
+        delete producer;
+        s_objectProducersMap.erase(object);
+    }
+
+    template<class TObject> static void subscribePrivate1(Listener<TObject>* , TObject* ) {}
+    template<class TObject> static void registerProducerPrivate1(Producer<TObject>*, TObject*) {}
+
+    static unordered_map<void*, IListener*> s_objectObserversMap;
+    static unordered_map<void*, IProducer*> s_objectProducersMap;
 };
 
-map<void*, EventBus::IReceiver*> EventBus::s_Receivers = map<void*, EventBus::IReceiver*>();
-map<void*, EventBus::IProducer*> EventBus::s_Producers = map<void*, EventBus::IProducer*>();
+template<class TEvent>
+EventBus::BasicCollection<EventBus::EventHandlerBase<TEvent>*> EventBus::HandlersCollection<TEvent>::s_handlers = EventBus::BasicCollection<EventBus::EventHandlerBase<TEvent>*>();
 
-template<class T>
-vector<function<void(const T&)>*> EventBus::ObserversCollection<T>::s_Observers = vector<function<void(const T&)>*>();
-template<class T>
-vector<function<T()>*> EventBus::ObserversCollection<T>::s_Producers = vector<function<T()>*>();
+unordered_map<void*, EventBus::IListener*> EventBus::s_objectObserversMap = unordered_map<void*, EventBus::IListener*>();
+unordered_map<void*, EventBus::IProducer*> EventBus::s_objectProducersMap = unordered_map<void*, EventBus::IProducer*>();
 
-
-template<class C, class T>
-unsigned int EventBus::Observer<C, T>::s_Count = 0;
-
-template<class C, class T>
-unsigned int EventBus::ProducerEvent<C, T>::s_Count = 0;
+#endif //_EVENT_BUS_PP_H_
