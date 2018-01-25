@@ -1,7 +1,7 @@
 /*
  * The MIT License (MIT)
 
- * Copyright (c) 2017 Sergey Dzhaltyr
+ * Copyright (c) 2017-2018 Sergey Dzhaltyr
 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -75,15 +75,10 @@ private:
 
         void remove(TObject object)
         {
-            vector<TObject>::iterator iter = find(objects.begin(), objects.end(), object);
-            if (iter != objects.end())
-            {
-                swap(*iter, objects.back());
-                objects.pop_back();
-            }
+            objects.erase(std::remove(objects.begin(), objects.end(), object), objects.end());
         }
 
-        vector<TObject>    objects;
+        vector<TObject>     objects;
     };
 
 
@@ -94,7 +89,7 @@ private:
     class EventHandlerBase : public IEventHandler
     {
     public:
-        virtual void       send(const TEvent&) = 0;
+        virtual void        send(const TEvent&) = 0;
     };
 
     template<class TObject>
@@ -144,17 +139,15 @@ private:
         }
 
     private:
-
-        TObject* m_listener;
-        TEventHandler m_handler;
+        TObject*            m_listener;
+        TEventHandler       m_handler;
     };
 
     template<class TEvent>
     class HandlersCollection final
     {
-    public:
         typedef EventHandlerBase<TEvent> TEventHandler;
-
+    public:
         static void addHandler(TEventHandler* handler)
         {
             s_handlers.add(handler);
@@ -184,6 +177,13 @@ private:
     struct IProducer { virtual ~IProducer(){} };
     struct IEventGenerator { virtual ~IEventGenerator(){} };
 
+    template<class TEvent>
+    class EventGeneratorBase : public IEventGenerator
+    {
+    public:
+        virtual TEvent generate() = 0;
+    };
+
     template<class TObject>
     class Producer : public IProducer
     {
@@ -206,6 +206,63 @@ private:
 
     private:
         vector<IEventHandler*> m_eventGenerators;
+    };
+
+    template<class TObject, class TEvent>
+    class EventGenerator final : public EventGeneratorBase<TEvent>
+    {
+        typedef TEvent(TObject::*TEventGenerator)();
+    public:
+        EventGenerator(TObject* object, TEventGenerator handler)
+            : m_producer(object)
+            , m_generator(handler)
+        {
+           
+        }
+
+        virtual ~EventGenerator()
+        {
+
+        }
+
+        TEvent generate() override
+        {
+            return (m_producer->*m_generator)();
+        }
+
+    private:
+        TObject*            m_producer;
+        TEventGenerator     m_generator;
+    };
+
+    template<class TEvent>
+    class GeneratorsHandler
+    {
+        typedef EventGeneratorBase<TEvent> TEventGenerator;
+    public:
+        static void addGenerator(TEventGenerator* handler)
+        {
+            s_generators.add(handler);
+        }
+
+        static void removeGenerator(TEventGenerator* handler)
+        {
+            s_generators.remove(handler);
+        }
+
+        static void sendEvent(const TEvent& event)
+        {
+            for (TEventHandler* handler : s_handlers.objects)
+            {
+                if (handler)
+                {
+                    handler->send(event);
+                }
+            }
+        }
+
+    private:
+        static BasicCollection<TEventGenerator*> s_generators;
     };
 
     template<class TObject, class ...THandlers>
@@ -259,7 +316,8 @@ private:
     template<class TObject, class TEvent, class ...TGenerators>
     static void registerProducerPrivate1(Producer<TObject>* producer, TObject* object, TEvent(TObject::*generator)(), TGenerators ...generators)
     {
-        
+        IEventGenerator* eventGenerator = new EventGenerator<TObject, TEvent>(object, generator);
+        producer->addEventGenerator(eventGenerator);
 
         registerProducerPrivate1(producer, object, generators...);
     }
